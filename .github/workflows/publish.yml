@@ -1,0 +1,57 @@
+name: Publish reviewed package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$GITHUB_REF" = refs/heads/main
+  validate:
+    needs: source
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    concurrency:
+      group: npm-publication
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PACKAGE_SHA: ${{ needs.validate.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-candidate
+          path: .artifacts/package
+      - run: node scripts/publication.mjs publish
+  verify:
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_SHA: ${{ needs.validate.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-candidate
+          path: .artifacts/package
+      - run: node scripts/publication.mjs verify
