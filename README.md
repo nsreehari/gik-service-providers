@@ -237,10 +237,11 @@ tagged `npm-YYYY-MM-DD.N` (stable) or `npm-next-YYYY-MM-DD.N` (prerelease).
 Readonly validation builds, tests, packs and exercises the package once.
 After `npm-publish` approval, publication consumes the same manifest-digest-bound
 archive without installing project dependencies, rebuilding or repacking.
-Readonly registry verification then checks exact bytes, source provenance,
-signatures and a clean typed/runtime consumer. Manual `publish.yml` dispatch
-only validates; manual `verify-published-packages.yml` dispatch checks the
-existing registry version without claiming it was published from current source.
+The final readonly job in the publishing workflow checks registry bytes,
+source provenance, signatures and a clean typed/runtime consumer. It does not
+rebuild or rerun the unit suite. Manual `publish.yml` dispatch only validates.
+This repository has two workflow files: [CI](.github/workflows/ci.yml) and
+[publishing](.github/workflows/publish.yml).
 The npm trusted-publisher mapping must explicitly allow direct `npm publish`;
 the GitHub environment admits `main` and `npm-*` tags and retains owner approval.
 No App/token-based version or release bot is required.

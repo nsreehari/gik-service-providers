@@ -81,11 +81,28 @@ jobs:
           path: .artifacts/npm-release
       - run: npm run release:publish-artifacts
   verify-published:
+    name: Verify published package
     needs: [source, validate, publish]
     if: github.event_name == 'release'
-    uses: ./.github/workflows/verify-published-packages.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-    with:
-      commit: ${{ needs.source.outputs.commit }}
-      manifest_sha256: ${{ needs.validate.outputs.digest }}
+    env:
+      RELEASE_MANIFEST_SHA256: ${{ needs.validate.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm install --global npm@11.19.0 --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: gik-npm-release
+          path: .artifacts/npm-release
+      - run: npm run release:verify-published
