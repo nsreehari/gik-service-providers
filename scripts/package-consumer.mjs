@@ -10,7 +10,9 @@ const run = (command, args, options = {}) => execFileSync(command, args, {
 });
 const source = JSON.parse(readFileSync("package.json", "utf8"));
 assert.ok(!source.main && !source.types);
-assert.ok(Object.keys(source.exports).every((entry) => entry.startsWith("./") && !entry.includes("*")));
+assert.ok(Object.keys(source.exports).length > 0);
+assert.ok(Object.keys(source.exports).every((entry) => entry.startsWith("./") && !/[*\\]/.test(entry)
+  && entry.slice(2).split("/").every((part) => part && part !== "." && part !== "..")));
 const directory = ".artifacts/package";
 mkdirSync(directory, { recursive: true });
 const packed = JSON.parse(run("npm", ["exec", "--yes", "--package=npm@11.19.0", "--", "npm",
@@ -41,13 +43,21 @@ try {
   run(process.execPath, [join(temporary, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict",
     "--module", "NodeNext", "--moduleResolution", "NodeNext", "--target", "ES2022", "check.ts"], { cwd: temporary });
   for (const specifier of specifiers) {
+    const siblingTargets = Object.entries(source.exports)
+      .filter(([entry]) => source.name + entry.slice(1) !== specifier)
+      .flatMap(([, value]) => targets(value)).filter((target) => /\.[cm]?js$/.test(target))
+      .map((target) => `/node_modules/${source.name}/${target.slice(2)}`);
     run(process.execPath, ["--input-type=module", "-e", `
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 const specifier = ${JSON.stringify(specifier)};
 registerHooks({ resolve(request, context, next) {
   if (request.startsWith(${JSON.stringify(source.name + "/")}) && request !== specifier) throw new Error("Eager sibling provider import");
-  return next(request, context);
+  if (["gik-service-providers/foundry", "gik-service-providers/gmail"].includes(specifier)
+    && (request === "croner" || request.startsWith("croner/"))) throw new Error("Unrelated scheduler dependency");
+  const result = next(request, context);
+  if (${JSON.stringify(siblingTargets)}.some((target) => result.url.endsWith(target))) throw new Error("Eager relative sibling provider import");
+  return result;
 } });
 await import(specifier);
 await assert.rejects(import(${JSON.stringify(source.name)}), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
