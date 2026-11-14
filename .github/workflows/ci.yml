@@ -2,15 +2,24 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      generate_locks:
+        description: Generate a reviewable lock only, not validation evidence
+        type: boolean
+        default: false
   workflow_call:
     outputs:
       digest:
-        description: SHA-256 of the inspected package archive
+        description: SHA-256 of the inspected release manifest
         value: ${{ jobs.validate.outputs.digest }}
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   locks:
+    if: github.event_name == 'workflow_dispatch' && inputs.generate_locks == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -19,10 +28,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - name: Resolve reproducible lock without scripts or manifest changes
-        run: |
+      - run: |
           npm exec --yes --package=npm@11.19.0 -- npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           git diff --exit-code -- . ':!package-lock.json'
           echo "Source: $(git rev-parse HEAD)"
@@ -33,11 +40,11 @@ jobs:
           path: package-lock.json
           if-no-files-found: error
   validate:
-    needs: locks
+    if: github.event_name != 'workflow_dispatch' || inputs.generate_locks != true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      digest: ${{ steps.pack.outputs.sha256 }}
+      digest: ${{ steps.pack.outputs.manifest_sha256 }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -46,20 +53,21 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Require the reviewed committed lock
-        run: git ls-files --error-unmatch package-lock.json
-      - name: Install and validate without changing lock
+          cache: npm
+      - name: Use pinned npm
+        run: npm install --global npm@11.19.0 --no-audit --no-fund
+      - name: Require committed lock and validate once
         run: |
-          npm exec --yes --package=npm@11.19.0 -- npm install --no-audit --no-fund
+          git ls-files --error-unmatch package-lock.json
+          npm install --no-audit --no-fund
           git diff --exit-code -- package-lock.json
-          npm run build
-          npm run typecheck
-          npm test
-      - name: Inspect and exercise actual packed consumer
+          npm run release:gate
+      - name: Pack once without lifecycle rebuilding and exercise actual consumers
         id: pack
-        run: npm run test:package
+        run: npm run release:pack
       - uses: actions/upload-artifact@v4
         with:
-          name: package-candidate
-          path: .artifacts/package
+          name: gik-npm-release
+          path: .artifacts/npm-release
           if-no-files-found: error
+          include-hidden-files: true

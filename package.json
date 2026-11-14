@@ -44,7 +44,12 @@
     "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run && node --test test/*.test.mjs",
-    "test:package": "node scripts/package-consumer.mjs"
+    "test:package": "npm run release:pack",
+    "release:validate": "node scripts/validate-npm-release.mjs",
+    "release:gate": "npm run release:validate && npm run build && npm run typecheck && npm test",
+    "release:pack": "node scripts/release-artifacts.mjs pack",
+    "release:publish-artifacts": "node scripts/release-artifacts.mjs publish",
+    "release:verify-published": "node scripts/verify-published-packages.mjs"
   },
   "devDependencies": {
     "@types/node": "^24",
