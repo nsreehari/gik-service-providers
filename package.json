@@ -1,6 +1,6 @@
 {
   "name": "gik-service-providers",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Individually imported host-managed service providers for GIK.",
   "type": "module",
   "license": "MIT",
@@ -16,6 +16,10 @@
     "examples"
   ],
   "exports": {
+    "./market-quotes": {
+      "types": "./dist/market-quotes.d.ts",
+      "import": "./dist/market-quotes.js"
+    },
     "./scheduler": {
       "types": "./dist/scheduler.d.ts",
       "import": "./dist/scheduler.js"
