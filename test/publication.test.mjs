@@ -2,8 +2,53 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { validateCandidate, validateProvenance, validateReleaseManifest } from "../scripts/release-artifacts.mjs";
+import { validateCandidate, validateProvenance, validateReleaseManifest, waitForPublishedMetadata } from "../scripts/release-artifacts.mjs";
 import { validateReleaseConfig } from "../scripts/validate-npm-release.mjs";
+
+test("registry propagation can exceed the old minute and succeed at the final check", async () => {
+  const source = { name: "gik-service-providers", version: "0.3.0" };
+  const published = { ...source, dist: { integrity: "expected" } };
+  let checks = 0;
+  const waits = [];
+  assert.equal(await waitForPublishedMetadata(source, { integrity: "expected" }, {
+    readMetadata: async (name, version) => {
+      assert.equal(name, source.name);
+      assert.equal(version, source.version);
+      return ++checks === 31 ? published : null;
+    },
+    sleep: async (milliseconds) => { waits.push(milliseconds); },
+  }), published);
+  assert.equal(checks, 31);
+  assert.equal(waits.length, 30);
+  assert.equal(waits.reduce((sum, milliseconds) => sum + milliseconds, 0), 300_000);
+});
+
+test("registry propagation exhaustion reports unavailability, not an integrity failure", async () => {
+  let checks = 0, waits = 0;
+  await assert.rejects(waitForPublishedMetadata({ name: "gik-service-providers", version: "0.3.0" }, undefined, {
+    readMetadata: async () => { checks++; return null; },
+    sleep: async () => { waits++; },
+  }), /Registry propagation timed out.*gik-service-providers@0\.3\.0.*HTTP 404.*31 checks/);
+  assert.equal(checks, 31);
+  assert.equal(waits, 30);
+});
+
+test("registry identity, integrity and request failures fail immediately without retry", async () => {
+  const source = { name: "gik-service-providers", version: "0.3.0" };
+  for (const [result, message] of [
+    [{ ...source, name: "other-package" }, /identity mismatch/],
+    [{ ...source, version: "0.2.0" }, /identity mismatch/],
+    [{ ...source, dist: { integrity: "changed" } }, /integrity mismatch/],
+    [new Error("Registry metadata HTTP 503"), /HTTP 503/],
+  ]) {
+    let checks = 0;
+    await assert.rejects(waitForPublishedMetadata(source, { integrity: "expected" }, {
+      readMetadata: async () => { checks++; if (result instanceof Error) throw result; return result; },
+      sleep: async () => { assert.fail("Invalid metadata and request errors must not be retried"); },
+    }), message);
+    assert.equal(checks, 1);
+  }
+});
 
 test("Samples notification follows stable verification with a Samples-only App token", () => {
   const workflow = readFileSync(new URL("../.github/workflows/publish.yml", import.meta.url), "utf8");
