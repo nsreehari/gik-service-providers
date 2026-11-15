@@ -272,6 +272,10 @@ archive without installing project dependencies, rebuilding or repacking.
 The final readonly job in the publishing workflow checks registry bytes,
 source provenance, signatures and a clean typed/runtime consumer. It does not
 rebuild or rerun the unit suite. Manual `publish.yml` dispatch only validates.
+Registry verification allows 31 metadata checks separated by 30 ten-second waits
+(five minutes of propagation waiting). Only missing version metadata (HTTP 404)
+is retried, with explicit progress and timeout errors. Identity, integrity,
+provenance, signature and other request failures remain blocking without retry.
 This repository has two workflow files: [CI](.github/workflows/ci.yml) and
 [publishing](.github/workflows/publish.yml).
 The npm trusted-publisher mapping must explicitly allow direct `npm publish`;

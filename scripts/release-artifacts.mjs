@@ -57,6 +57,23 @@ async function metadata(name, version) {
   if (!response.ok) throw new Error(`Registry metadata HTTP ${response.status}`);
   return response.json();
 }
+export async function waitForPublishedMetadata(source, candidate, {
+  readMetadata = metadata,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+} = {}) {
+  for (let attempt = 0; attempt < 31; attempt++) {
+    const published = await readMetadata(source.name, source.version);
+    if (published !== null) {
+      if (published.name !== source.name || published.version !== source.version) throw new Error("Published package identity mismatch");
+      if (candidate && published.dist?.integrity !== candidate.integrity) throw new Error("Published candidate integrity mismatch");
+      return published;
+    }
+    if (attempt === 30) break;
+    console.log(`Registry has not exposed ${source.name}@${source.version} yet (HTTP 404); retrying in 10 seconds (${attempt + 1}/30).`);
+    await sleep(10_000);
+  }
+  throw new Error(`Registry propagation timed out for ${source.name}@${source.version}: metadata still unavailable (HTTP 404) after 31 checks`);
+}
 function releaseSource() {
   const source = JSON.parse(readFileSync("package.json", "utf8"));
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -84,14 +101,7 @@ export async function verifyPublished(expectedDigest) {
   const { source, commit } = releaseSource();
   const requiresCandidate = process.env.GITHUB_EVENT_NAME === "release" || expectedDigest !== undefined;
   const candidate = requiresCandidate ? verifyRelease(source, commit, expectedDigest) : undefined;
-  let published;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    published = await metadata(source.name, source.version);
-    if (published) break;
-    await new Promise((resolve) => setTimeout(resolve, 10_000));
-  }
-  if (!published || published.name !== source.name || published.version !== source.version
-    || (candidate && published.dist?.integrity !== candidate.integrity)) throw new Error("Published candidate integrity mismatch");
+  const published = await waitForPublishedMetadata(source, candidate);
   const tarball = new URL(published.dist.tarball);
   const attestation = new URL(published.dist.attestations.url);
   for (const url of [tarball, attestation]) {
