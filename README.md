@@ -245,3 +245,13 @@ This repository has two workflow files: [CI](.github/workflows/ci.yml) and
 The npm trusted-publisher mapping must explicitly allow direct `npm publish`;
 the GitHub environment admits `main` and `npm-*` tags and retains owner approval.
 No App/token-based version or release bot is required.
+
+After verified stable publication, the same publishing workflow dispatches
+`gik-library-release-verified` to Samples to rebuild its `latest` npm consumers
+and `/gik-samples/vendor` downloads. Prereleases and failed verification do not
+notify. Configure the existing maintainer App variable `GIK_MAINTAINER_APP_ID`
+and secret `GIK_MAINTAINER_APP_PRIVATE_KEY` through the approved owner channel;
+the installation must include Samples. The dispatch token is scoped only to
+Samples Contents write. No key material is copied, and missing configuration
+fails the notification job explicitly. Samples independently checks the official
+release/run and npm provenance/signatures before deployment.

@@ -106,3 +106,32 @@ jobs:
           name: gik-npm-release
           path: .artifacts/npm-release
       - run: npm run release:verify-published
+  notify-samples:
+    name: Refresh Samples after verified stable publication
+    needs: [source, verify-published]
+    if: github.event_name == 'release' && needs.source.outputs.channel == 'latest'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Create Samples-only maintainer App token
+        id: samples
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.GIK_MAINTAINER_APP_ID }}
+          private-key: ${{ secrets.GIK_MAINTAINER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: gik-samples
+          permission-contents: write
+      - name: Request verified latest Pages and vendor refresh
+        env:
+          GH_TOKEN: ${{ steps.samples.outputs.token }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
+          SOURCE_RUN: ${{ github.run_id }}
+          SOURCE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          jq -n --arg repository "$SOURCE_REPOSITORY" --arg commit "$SOURCE_COMMIT" \
+            --arg runId "$SOURCE_RUN" --arg tag "$SOURCE_TAG" \
+            '{event_type:"gik-library-release-verified",client_payload:{repository:$repository,commit:$commit,runId:$runId,tag:$tag}}' \
+            | gh api repos/nsreehari/gik-samples/dispatches --input -

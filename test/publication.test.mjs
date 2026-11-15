@@ -1,8 +1,20 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { validateCandidate, validateProvenance, validateReleaseManifest } from "../scripts/release-artifacts.mjs";
 import { validateReleaseConfig } from "../scripts/validate-npm-release.mjs";
+
+test("Samples notification follows stable verification with a Samples-only App token", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/publish.yml", import.meta.url), "utf8");
+  const notification = workflow.slice(workflow.indexOf("  notify-samples:"));
+  assert.match(notification, /needs: \[source, verify-published\]/);
+  assert.match(notification, /needs\.source\.outputs\.channel == 'latest'/);
+  assert.match(notification, /repositories: gik-samples\s+permission-contents: write/);
+  assert.match(notification, /gik-library-release-verified/);
+  assert.match(notification, /SOURCE_RUN: \$\{\{ github.run_id \}\}/);
+  assert.doesNotMatch(notification, /id-token: write|npm publish|git push/);
+});
 
 test("publication rejects changed source, archive and digest handoff", () => {
   const bytes = Buffer.from("validated archive");
