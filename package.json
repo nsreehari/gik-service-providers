@@ -16,6 +16,10 @@
     "examples"
   ],
   "exports": {
+    "./gmail-connection": {
+      "types": "./dist/gmail-connection.d.ts",
+      "import": "./dist/gmail-connection.js"
+    },
     "./market-quotes": {
       "types": "./dist/market-quotes.d.ts",
       "import": "./dist/market-quotes.js"

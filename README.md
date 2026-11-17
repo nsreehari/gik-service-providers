@@ -85,6 +85,38 @@ Objects, arrays and JSON scalars are supported; non-JSON values and non-finite
 numbers are rejected. The package does not normalize quote shapes, fetch Yahoo,
 choose HTTP endpoints, cache prices or perform financial calculations.
 
+## Optional Gmail Read Connection
+
+`gik-service-providers/gmail-connection` exports `createGmailReadConnection`.
+This optional host utility was extracted from Finbook PR #40, commit
+`21daa1d9e2d1427078070d5806a3b6c1f8fc9914` (MIT, nsreehari), without its
+application, Drive configuration or OAuth UI dependencies.
+
+The host supplies `credentialRef` and `authorize({ permissions, signal })`.
+Authorization returns an in-memory `{ expiresAt, grantedScopes, getToken,
+invalidate }` grant. The host chooses the OAuth client, consent UI, account
+isolation and revocation implementation. It must not log/persist grants and must
+call `disconnect()` on account changes, provider disablement or host shutdown.
+OAuth errors propagate; there is no refresh, retry or persistence.
+
+`connect(requirement, signal)` is an explicit host action, never setup discovery.
+`inspect(requirement)` reports read-credential readiness only. The host maps
+trusted setup actions itself, inspects the full service identity and keeps
+endpoint/invocation admission in its normal service context.
+Return `helper.connection` from `resolveCredential` for the registered reference
+and call `helper.disconnect()` from `clearCredential`.
+`getSnapshot`/`subscribe` expose only authorized/busy/revision, never tokens.
+
+The port implements the existing `GmailConnection` contract with fixed-origin
+message GETs, omitted cookies, no redirects, 30-second cancellation, an 8 MiB
+streaming limit, and generation/expiry checks before releasing results.
+Only `gmail.readonly` requirements are accepted. It has no send port, does not
+satisfy `gmail-send-authority`, and cannot serve combined read/send declarations.
+Use a separately host-authorized connection for those declarations. Mail
+presentation approval and an OAuth grant never substitute for exact-message
+send authorization. Synthetic tests do not establish live Google verification,
+authorization or deployment acceptance.
+
 ## Scheduler
 
 Kind `cron-scheduler`, version `1`, config:

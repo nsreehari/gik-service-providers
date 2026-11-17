@@ -2,6 +2,7 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
+    "gmail-connection": "src/gmail-connection.ts",
     "market-quotes": "src/market-quotes.ts",
     scheduler: "src/scheduler.ts",
     gmail: "src/gmail.ts",
