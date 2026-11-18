@@ -54,6 +54,45 @@ windows or stores refresh tokens. Gmail scopes may require Google's sensitive/
 restricted-scope verification; see [Google's scope guide](https://developers.google.com/workspace/gmail/api/auth/scopes).
 The examples are integration seams, not a bundled OAuth application or token vault.
 
+## Probes And Smoke Tests
+
+Gmail, Market Quotes and Scheduler independently advertise `supports.probe: true`
+and `supports.testSmoke: true`. `probe(context)` checks readiness without executing
+business operations. `testSmoke(request, context)` performs an actual diagnostic
+operation; it is not an alias for `probe` or a configuration-only check.
+
+| Provider | Probe | Smoke Test |
+| --- | --- | --- |
+| Gmail Read | Dependency, endpoint admission and connection shape | `search`/`watch`: one-message list request; `get`: caller-supplied sample ID |
+| Gmail Send | Send scope/dependency and host send-port availability | Send the caller-supplied sample `raw` email; return the sent message ID |
+| Market Quotes | Host dependency and execute-port readiness | Actual quote request for caller-supplied `symbols` |
+| Scheduler | Validate expression/timezone and report next occurrence | Fire a separate one-shot Croner timer and return its timestamp |
+
+Smoke input uses the provider's existing operation input schema. For Gmail Send,
+the settings host supplies an actual sample RFC 2822 base64url message with the
+intended recipient, subject and body. Sending uses the same host-authorized send
+port as ordinary email, including uncertain-outcome handling, and never retries.
+A successful Gmail probe does not imply a message was sent.
+
+Scheduler's one-shot timer normally completes in about a second and times out
+after five seconds. It never fires the application's `due` Sense or changes its
+active schedule. Gmail watch smoke tests do a bounded read, not a long-lived
+subscription. Results contain diagnostic receipts, not message bodies or quotes.
+An empty mailbox or a valid empty quote response verifies the transport, not
+the existence of any particular business record or market price.
+
+Invoke these methods explicitly from settings/debugging actions, not during
+discovery or setup loading. Normal service dependency checks and host execution
+authority still apply. The adapter context carries cancellation. The factories
+return `DiagnosticServiceKindFactory` with typed `DiagnosticServiceAdapter`
+methods (types re-exported from each provider subpath); these extend the published
+ControlFace contracts structurally without requiring an unpublished dependency.
+With a ControlFace version exposing `host.testSmoke(effect, context?)`, use that
+entry point for normal host authorization, request recording and cancellation.
+Older hosts can call typed adapters through their own authorized diagnostic
+handler; registering these factories alone does not add a smoke API to an older
+ControlFace host.
+
 ## Market Quotes
 
 Kind `market-quotes`, version `1`, config:

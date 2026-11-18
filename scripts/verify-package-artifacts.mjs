@@ -69,7 +69,23 @@ export async function exerciseConsumer(packageSpec, source, signatureAudit = fal
     if (signatureAudit) run("npm", ["audit", "signatures"], { cwd: temporary });
     const specifiers = Object.keys(source.exports).map((entry) => source.name + entry.slice(1));
     writeFileSync(join(temporary, "check.ts"), specifiers.map((specifier, index) =>
-      `import * as entry${index} from ${JSON.stringify(specifier)};\nvoid entry${index};`).join("\n"));
+      `import * as entry${index} from ${JSON.stringify(specifier)};\nvoid entry${index};`).join("\n") + `
+import { createGmailServiceKind } from "gik-service-providers/gmail";
+import { createMarketQuotesServiceKind } from "gik-service-providers/market-quotes";
+import { createSchedulerServiceKind } from "gik-service-providers/scheduler";
+import type { ServiceAdapterContext, ServiceRequest } from "gik-controlface/services";
+declare const request: ServiceRequest;
+declare const context: ServiceAdapterContext;
+for (const factory of [createGmailServiceKind(), createMarketQuotesServiceKind(), createSchedulerServiceKind()]) {
+  factory.manifest.supports.testSmoke satisfies true;
+  factory.manifest.supports.probe satisfies true;
+}
+function checkAdapter(adapter: ReturnType<ReturnType<typeof createGmailServiceKind>["create"]>) {
+  void adapter.probe(context);
+  void adapter.testSmoke(request, context);
+}
+void checkAdapter;
+`);
     run(process.execPath, [join(temporary, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict",
       "--module", "NodeNext", "--moduleResolution", "NodeNext", "--target", "ES2022", "check.ts"], { cwd: temporary });
     for (const specifier of specifiers) {
@@ -89,7 +105,13 @@ export async function exerciseConsumer(packageSpec, source, signatureAudit = fal
     if (${JSON.stringify(siblingTargets)}.some((target) => result.url.endsWith(target))) throw new Error("Eager relative sibling provider import");
     return result;
   } });
-  await import(specifier);
+  const entry = await import(specifier);
+  for (const name of ["createGmailServiceKind", "createMarketQuotesServiceKind", "createSchedulerServiceKind"]) {
+    if (typeof entry[name] !== "function") continue;
+    const factory = entry[name]();
+    assert.equal(factory.manifest.supports.probe, true);
+    assert.equal(factory.manifest.supports.testSmoke, true);
+  }
   await assert.rejects(import(${JSON.stringify(source.name)}), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
   `], { cwd: temporary });
     }

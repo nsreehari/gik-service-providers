@@ -1,8 +1,10 @@
 import { Cron } from "croner";
-import { serviceConfig, type ServiceKindFactory } from "gik-controlface/services";
+import { serviceConfig } from "gik-controlface/services";
 import { object, text, keys } from "./values";
+import type { DiagnosticServiceKindFactory } from "./diagnostics";
+export type { DiagnosticServiceAdapter, DiagnosticServiceKindFactory } from "./diagnostics";
 
-export function createSchedulerServiceKind(): ServiceKindFactory {
+export function createSchedulerServiceKind(): DiagnosticServiceKindFactory {
   return {
     manifest: {
       id: "cron-scheduler", version: "1", title: "Process-local cron",
@@ -11,7 +13,7 @@ export function createSchedulerServiceKind(): ServiceKindFactory {
         properties: { expression: { type: "string", minLength: 1 }, timezone: { type: "string", minLength: 1 } },
       },
       subjects: ["cell", "substrate-agent", "chat", "task"],
-      executionModes: ["immediate"], supports: { observe: true },
+      executionModes: ["immediate"], supports: { observe: true, probe: true, testSmoke: true },
     },
     validate(declaration) {
       try {
@@ -40,6 +42,14 @@ export function createSchedulerServiceKind(): ServiceKindFactory {
       const expression = text(config.expression, "expression");
       const timezone = text(config.timezone, "timezone");
       const provider = { id: "cron-scheduler", version: "1" };
+      function nextOccurrence() {
+        const job = new Cron(expression, { timezone, paused: true });
+        try {
+          const nextRun = job.nextRun();
+          if (!nextRun) throw new Error("Cron expression has no future occurrence");
+          return nextRun.toISOString();
+        } finally { job.stop(); }
+      }
       return {
         provider,
         discover: async () => ({
@@ -50,6 +60,41 @@ export function createSchedulerServiceKind(): ServiceKindFactory {
             assurance: "declared-and-locally-validated",
           }],
         }),
+        probe(context) {
+          context.signal?.throwIfAborted();
+          return { ok: true, detail: { check: "schedule", nextRun: nextOccurrence(), timezone } };
+        },
+        async testSmoke(request, context) {
+          keys(object(request.input ?? {}, "scheduler smoke input"), []);
+          if (request.operation !== "tick") throw new Error("Unsupported scheduler smoke test");
+          context.signal?.throwIfAborted();
+          const nextRun = nextOccurrence();
+          // A separate one-shot job verifies the timer without firing the application's Sense.
+          const firedAt = await new Promise<string>((resolve, reject) => {
+            const job = new Cron(new Date(Date.now() + 1000), { timezone, paused: true }, () => {
+              cleanup();
+              resolve(new Date().toISOString());
+            });
+            const timeout = setTimeout(() => {
+              cleanup();
+              reject(new Error("Scheduler smoke timer did not fire within 5 seconds"));
+            }, 5000);
+            const abort = () => {
+              cleanup();
+              reject(context.signal?.reason ?? new Error("Scheduler smoke test aborted"));
+            };
+            const cleanup = () => {
+              job.stop();
+              clearTimeout(timeout);
+              context.signal?.removeEventListener("abort", abort);
+            };
+            context.signal?.addEventListener("abort", abort, { once: true });
+            if (context.signal?.aborted) abort();
+            else job.resume();
+          });
+          context.signal?.throwIfAborted();
+          return { ok: true, detail: { check: "one-shot-timer", firedAt, timezone, nextRun } };
+        },
         execute() { throw new Error("Cron is an observation, not a bounded invocation"); },
         async observe(request, context) {
           keys(object(request.input ?? {}, "scheduler input"), []);
