@@ -1,9 +1,11 @@
 import {
   requireServiceDependency, serviceConfig,
-  type ServiceDependencyRequirement, type ServiceKindFactory,
+  type ServiceDependencyRequirement, type ServiceAdapterContext, type ServiceRequest,
 } from "gik-controlface/services";
 import type { NativeServiceDeclaration, Json } from "gik-kernel";
 import { keys, object, text } from "./values";
+import type { DiagnosticServiceKindFactory } from "./diagnostics";
+export type { DiagnosticServiceAdapter, DiagnosticServiceKindFactory } from "./diagnostics";
 
 const symbolPattern = /^[A-Z0-9^][A-Z0-9.^=-]{0,31}(?![\s\S])/;
 const referencePattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}(?![\s\S])/;
@@ -47,12 +49,13 @@ function isFiniteJson(value: unknown, ancestors = new Set<object>()): value is J
   return valid;
 }
 
-export function createMarketQuotesServiceKind(): ServiceKindFactory {
+export function createMarketQuotesServiceKind(): DiagnosticServiceKindFactory {
   const provider = { id: "market-quotes", version: "1", title: "Market Quotes" };
   return {
     manifest: {
       ...provider, subjects: ["cell", "substrate-agent", "chat", "task"],
       executionModes: ["immediate", "queued"],
+      supports: { probe: true, testSmoke: true },
       configSchema: {
         type: "object", additionalProperties: false, required: ["providerRef"],
         properties: { providerRef: { type: "string", pattern: referencePattern.source, maxLength: 128 } },
@@ -71,6 +74,26 @@ export function createMarketQuotesServiceKind(): ServiceKindFactory {
     create(declaration, context) {
       const dependency = requirement(declaration);
       const providerRef = dependency.ref!;
+      async function execute(request: ServiceRequest, execution: ServiceAdapterContext) {
+        if (request.operation !== "get") throw new Error("Unsupported market quote operation");
+        execution.signal?.throwIfAborted();
+        requireServiceDependency(context, dependency, request.service);
+        const input = object(request.input, "Market quote input");
+        keys(input, ["symbols"]);
+        if (!Array.isArray(input.symbols) || input.symbols.length < 1 || input.symbols.length > 20
+          || Array.from(input.symbols).some((symbol) => typeof symbol !== "string" || !symbolPattern.test(symbol))) {
+          throw new Error("Market quote symbols must contain 1-20 valid uppercase symbols");
+        }
+        if (!context.execute) throw new Error("The host quote provider is unavailable");
+        const hostRequest: MarketQuotesHostRequest = {
+          kind: "market-quotes", providerRef, input: { symbols: [...input.symbols] }, signal: execution.signal,
+        };
+        const output = await context.execute(hostRequest);
+        execution.signal?.throwIfAborted();
+        requireServiceDependency(context, dependency, request.service);
+        if (!isFiniteJson(output)) throw new Error("Market quote output must be finite JSON data");
+        return { output };
+      }
       return {
         provider,
         discover: async () => ({
@@ -80,26 +103,22 @@ export function createMarketQuotesServiceKind(): ServiceKindFactory {
             inputSchema: marketQuoteInputSchema, assurance: "declared-and-locally-validated",
           }],
         }),
-        async execute(request, execution) {
-          if (request.operation !== "get") throw new Error("Unsupported market quote operation");
-          execution.signal?.throwIfAborted();
-          requireServiceDependency(context, dependency, request.service);
-          const input = object(request.input, "Market quote input");
-          keys(input, ["symbols"]);
-          if (!Array.isArray(input.symbols) || input.symbols.length < 1 || input.symbols.length > 20
-            || Array.from(input.symbols).some((symbol) => typeof symbol !== "string" || !symbolPattern.test(symbol))) {
-            throw new Error("Market quote symbols must contain 1-20 valid uppercase symbols");
-          }
+        probe(probeContext) {
+          probeContext.signal?.throwIfAborted();
+          const serviceId = probeContext.serviceId ?? context.identity?.serviceId;
+          if (!serviceId) throw new Error("Market quote probe requires a host service identity");
+          requireServiceDependency(context, dependency, serviceId);
           if (!context.execute) throw new Error("The host quote provider is unavailable");
-          const hostRequest: MarketQuotesHostRequest = {
-            kind: "market-quotes", providerRef, input: { symbols: [...input.symbols] }, signal: execution.signal,
-          };
-          const output = await context.execute(hostRequest);
-          execution.signal?.throwIfAborted();
-          requireServiceDependency(context, dependency, request.service);
-          if (!isFiniteJson(output)) throw new Error("Market quote output must be finite JSON data");
-          return { output };
+          return { ok: true, detail: { check: "readiness" } };
         },
+        async testSmoke(request, smokeContext) {
+          const signal = AbortSignal.any([
+            ...(smokeContext.signal ? [smokeContext.signal] : []), AbortSignal.timeout(30000),
+          ]);
+          await execute(request, { ...smokeContext, signal });
+          return { ok: true, detail: { check: "quote-request", liveRead: true } };
+        },
+        execute,
       };
     },
   };

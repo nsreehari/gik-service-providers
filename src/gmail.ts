@@ -1,9 +1,11 @@
 import {
   requireServiceDependency, serviceConfig, UnsatisfiedServiceDependencyError,
-  type ServiceDependencyRequirement, type ServiceKindFactory, type ServiceRequest,
+  type ServiceDependencyRequirement, type ServiceProbeResult, type ServiceRequest,
 } from "gik-controlface/services";
 import type { NativeServiceDeclaration } from "gik-kernel";
 import { integer, isJson, keys, object, text } from "./values";
+import type { DiagnosticServiceKindFactory } from "./diagnostics";
+export type { DiagnosticServiceAdapter, DiagnosticServiceKindFactory } from "./diagnostics";
 
 export const gmailScopes = {
   readonly: "https://www.googleapis.com/auth/gmail.readonly",
@@ -75,7 +77,7 @@ function isConnection(value: unknown): value is GmailConnection {
     && (!("send" in value) || value.send === undefined || typeof value.send === "function");
 }
 
-export function createGmailServiceKind(): ServiceKindFactory {
+export function createGmailServiceKind(): DiagnosticServiceKindFactory {
   return {
     manifest: {
       id: "gmail", version: "1", title: "Host-managed Gmail",
@@ -88,7 +90,7 @@ export function createGmailServiceKind(): ServiceKindFactory {
         },
       },
       subjects: ["cell", "substrate-agent", "chat", "task"],
-      executionModes: ["immediate", "queued"], supports: { observe: true },
+      executionModes: ["immediate", "queued"], supports: { observe: true, probe: true, testSmoke: true },
       operationConstraints: { send: { queueable: false, retryable: false } },
     },
     describeDependencies: (declaration) => [
@@ -209,6 +211,48 @@ export function createGmailServiceKind(): ServiceKindFactory {
             inputSchema: gmailInputSchemas[operation], assurance: "declared-and-locally-validated",
           })),
         }),
+        async probe(probeContext) {
+          probeContext.signal?.throwIfAborted();
+          const serviceId = probeContext.serviceId ?? context.identity?.serviceId;
+          if (!serviceId) throw new Error("Gmail probe requires a host service identity");
+          requireServiceDependency(context, dependency, serviceId);
+          const sends = operations.includes("send");
+          if (sends) requireServiceDependency(context, sendRequirement(declaration), serviceId);
+          const paths = [
+            ...(operations.some((operation) => operation !== "send") ? ["/gmail/v1/users/me/messages"] : []),
+            ...(sends ? ["/gmail/v1/users/me/messages/send"] : []),
+          ];
+          for (const path of paths) {
+            if (!context.authorizeEndpoint || !await context.authorizeEndpoint("gmail", new URL(path, endpoint))) {
+              throw new Error("Host denied the declared Gmail endpoint");
+            }
+          }
+          const connection = await context.resolveCredential?.(credentialRef);
+          if (!isConnection(connection)) throw new Error("Host must supply a Gmail connection");
+          if (sends && !connection.send) throw new Error("Host has not supplied an authorized Gmail send port");
+          probeContext.signal?.throwIfAborted();
+          requireServiceDependency(context, dependency, serviceId);
+          if (sends) requireServiceDependency(context, sendRequirement(declaration), serviceId);
+          return { ok: true, detail: { check: "readiness", sendPort: sends } };
+        },
+        async testSmoke(request, smokeContext): Promise<ServiceProbeResult> {
+          if (!operations.includes(request.operation)) throw new Error("Gmail operation is not declared");
+          const operation = request.operation === "watch" ? "search" : request.operation;
+          if (operation !== "search" && operation !== "get" && operation !== "send") throw new Error("Unsupported Gmail smoke test");
+          const input = object(request.input ?? {}, "Gmail smoke input");
+          const sample = operation === "search" ? { ...input, maxResults: 1 } : input;
+          if (!isJson(sample)) throw new Error("Gmail smoke input must be JSON data");
+          const output = object(await call({ ...request, input: sample }, operation, smokeContext.signal), "Gmail smoke response");
+          if (operation === "send") {
+            if (typeof output.id !== "string" || !output.id) {
+              throw new GmailSendUncertainError(new Error("Gmail send response has no message identity"));
+            }
+            return { ok: true, detail: { check: "send", messageId: output.id } };
+          }
+          smokeContext.signal?.throwIfAborted();
+          requireServiceDependency(context, dependency, request.service);
+          return { ok: true, detail: { check: operation, liveRead: true } };
+        },
         async execute(request, execution) {
           if (!operations.includes(request.operation)) throw new Error("Gmail operation is not declared");
           const operation = request.operation;
