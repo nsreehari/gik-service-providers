@@ -21,10 +21,25 @@ export interface GmailReadConnectionOptions {
   clock?: () => number;
 }
 
-/** Optional host utility; it neither opens OAuth UI nor implements send authority. */
+export type GmailAuthorizationGrant = GmailReadGrant;
+export type GmailAuthorizationRequest = GmailReadAuthorizationRequest;
+export type GmailAuthorizationConnectionOptions = GmailReadConnectionOptions;
+
+/** Read-only compatibility entry; use the authorization helper for a separate send grant. */
 export function createGmailReadConnection({
   credentialRef, authorize, fetcher = globalThis.fetch, clock = Date.now,
 }: GmailReadConnectionOptions) {
+  return createConnection({ credentialRef, authorize, fetcher, clock }, [gmailScopes.readonly]);
+}
+
+/** Owns grant mechanics only. OAuth UI, client policy and per-message send authority stay in the host. */
+export function createGmailAuthorizationConnection(options: GmailAuthorizationConnectionOptions) {
+  return createConnection(options, [gmailScopes.readonly, gmailScopes.send]);
+}
+
+function createConnection({
+  credentialRef, authorize, fetcher = globalThis.fetch, clock = Date.now,
+}: GmailAuthorizationConnectionOptions, allowedScopes: readonly string[]) {
   if (!credentialRef.trim()) throw new Error("A registered Gmail credential reference is required.");
   let session: GmailReadGrant | undefined;
   let generation = 0;
@@ -55,21 +70,25 @@ export function createGmailReadConnection({
       && requirement.ref === credentialRef;
   }
   function supported(permissions: readonly string[]) {
-    return permissions.length > 0 && permissions.every(permission => permission === gmailScopes.readonly);
+    return permissions.length > 0 && permissions.every(permission => allowedScopes.includes(permission));
   }
   function inspect(requirement: ServiceDependencyRequirement): ServiceDependencyStatus {
+    if (requirement.kind === "gmail-send-authority") return {
+      state: "authorization-required", message: "Sending requires approval of each complete message; an OAuth grant is not send approval.",
+    };
     if (!registered(requirement)) return {
       state: "unavailable", message: "This credential reference is not registered with the Gmail read connection.",
     };
     const permissions = requirement.permissions ?? [];
     if (!supported(permissions)) return {
-      state: "unavailable", message: "This connection supports Gmail read access only; sending requires separate host authority.",
+      state: "unavailable", message: "The service requested unsupported Gmail permissions.",
     };
-    if (!live()) return { state: "authorization-required", message: "Authorize Gmail read access through the host." };
+    const actions = [{ id: "gmail.authorize", title: "Authorize Gmail", requiresUserInteraction: true }];
+    if (!live()) return { state: "authorization-required", message: "Authorize Gmail separately from Google Drive through the host.", actions };
     if (permissions.some(permission => !session!.grantedScopes.includes(permission))) {
-      return { state: "insufficient-permissions", message: "The Gmail grant does not cover the declared read operations." };
+      return { state: "insufficient-permissions", message: "The Gmail grant does not cover the declared operations.", actions };
     }
-    return { state: "ready" };
+    return { state: "ready", actions: [{ id: "gmail.disconnect", title: "Disconnect Gmail", requiresUserInteraction: true }] };
   }
   const connection: GmailConnection = {
     async request(input) {
@@ -149,24 +168,25 @@ export function createGmailReadConnection({
     async connect(requirement: ServiceDependencyRequirement, signal?: AbortSignal) {
       if (pending) throw new Error("Gmail authorization is already in progress.");
       if (!registered(requirement) || !supported(requirement.permissions ?? [])) {
-        throw new Error("This Gmail read credential requirement is not registered with the host.");
+        throw new Error("This Gmail credential requirement is not registered with the host.");
       }
       signal?.throwIfAborted();
       const version = ++generation;
       const controller = new AbortController();
       pending = controller;
       const authorizationSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]);
+      const permissions = [...new Set(requirement.permissions)];
       publish();
       try {
-        const authorized = await authorize({ permissions: [gmailScopes.readonly], signal: authorizationSignal });
+        const authorized = await authorize({ permissions, signal: authorizationSignal });
         if (version !== generation || authorizationSignal.aborted) {
           authorized.invalidate();
           throw new DOMException("Gmail authorization was cancelled.", "AbortError");
         }
         if (!Number.isFinite(authorized.expiresAt) || authorized.expiresAt <= clock() + 10_000
-          || !authorized.grantedScopes.includes(gmailScopes.readonly)) {
+          || permissions.some(permission => !authorized.grantedScopes.includes(permission))) {
           authorized.invalidate();
-          throw new Error("The Gmail grant is expired or does not include read permission.");
+          throw new Error("The Gmail grant is expired or does not include the requested permissions.");
         }
         const previous = session;
         lifetime.abort();

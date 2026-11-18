@@ -85,7 +85,7 @@ Objects, arrays and JSON scalars are supported; non-JSON values and non-finite
 numbers are rejected. The package does not normalize quote shapes, fetch Yahoo,
 choose HTTP endpoints, cache prices or perform financial calculations.
 
-## Optional Gmail Read Connection
+## Optional Gmail Authorization And Read Connection
 
 `gik-service-providers/gmail-connection` exports `createGmailReadConnection`.
 This optional host utility was extracted from Finbook PR #40, commit
@@ -110,12 +110,22 @@ and call `helper.disconnect()` from `clearCredential`.
 The port implements the existing `GmailConnection` contract with fixed-origin
 message GETs, omitted cookies, no redirects, 30-second cancellation, an 8 MiB
 streaming limit, and generation/expiry checks before releasing results.
-Only `gmail.readonly` requirements are accepted. It has no send port, does not
-satisfy `gmail-send-authority`, and cannot serve combined read/send declarations.
-Use a separately host-authorized connection for those declarations. Mail
+The `createGmailReadConnection` entry accepts only `gmail.readonly` requirements.
+`createGmailAuthorizationConnection` also manages `gmail.send` OAuth consent:
+create separate instances with distinct credential references for independent
+read/send authorization and disconnection, as Finbook does. It verifies the
+returned grant includes every requested permission, rather than assuming consent.
+Inspection advertises explicit `gmail.authorize`/`gmail.disconnect` host actions,
+but never executes them. The host still dispatches trusted user-initiated actions.
+Both helpers have no send port and never satisfy `gmail-send-authority`.
+A send-only grant cannot execute reads. Connect a separately host-authorized send
+port if the application implements sending; these helpers do not implement it. Mail
 presentation approval and an OAuth grant never substitute for exact-message
 send authorization. Synthetic tests do not establish live Google verification,
 authorization or deployment acceptance.
+The authorization parity refresh was checked against Finbook commit
+`8a05e256d0511c9b0144f991c3520836d4a9a735`. Client-ID validation, separate
+Drive OAuth clients and Google Identity Services integration stay in the host.
 
 ## Scheduler
 

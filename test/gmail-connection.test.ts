@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import type { ServiceDependencyRequirement } from "gik-controlface/services";
-import { createGmailReadConnection, type GmailReadGrant } from "../src/gmail-connection";
+import { createGmailAuthorizationConnection, createGmailReadConnection, type GmailReadGrant, type GmailAuthorizationRequest } from "../src/gmail-connection";
 import { gmailScopes } from "../src/gmail";
 
 afterEach(() => vi.useRealTimers());
@@ -115,4 +115,40 @@ test("streaming size and disconnect during body consumption fail closed", async 
   helper.disconnect();
   stream.close();
   await assert.rejects(stale);
+});
+
+test("separate read and send grants preserve consent isolation without providing send authority", async () => {
+  const sendRequirement = { ...requirement, ref: "google/send", permissions: [gmailScopes.send] };
+  const readGrant = grant(), sendGrant = { ...grant(), grantedScopes: [gmailScopes.send] };
+  const authorize = vi.fn<(request: GmailAuthorizationRequest) => Promise<GmailReadGrant>>(async () => sendGrant);
+  const read = createGmailAuthorizationConnection({ credentialRef: requirement.ref!, authorize: async () => readGrant });
+  const send = createGmailAuthorizationConnection({ credentialRef: sendRequirement.ref, authorize });
+  try {
+    assert.equal(send.inspect(sendRequirement).actions?.[0].id, "gmail.authorize");
+    await read.connect(requirement);
+    await send.connect(sendRequirement);
+    assert.deepEqual(authorize.mock.calls[0][0].permissions, [gmailScopes.send]);
+    assert.equal(send.inspect(sendRequirement).state, "ready");
+    assert.equal(send.inspect(sendRequirement).actions?.[0].id, "gmail.disconnect");
+    assert.equal(send.inspect({ ...sendRequirement, kind: "gmail-send-authority" }).state, "authorization-required");
+    assert.equal(send.connection.send, undefined);
+    await assert.rejects(send.connection.request(input()), /Authorize Gmail read access/);
+    read.disconnect();
+    assert.equal(send.getSnapshot().authorized, true);
+    assert.equal(vi.mocked(sendGrant.invalidate).mock.calls.length, 0);
+    assert.equal(read.inspect(sendRequirement).state, "unavailable");
+  } finally { read.disconnect(); send.disconnect(); }
+});
+
+test("scope upgrades reject partial grants and propagate authorization errors", async () => {
+  const authorize = vi.fn()
+    .mockResolvedValueOnce(grant())
+    .mockRejectedValueOnce(new Error("Host denied consent"));
+  const helper = createGmailAuthorizationConnection({ credentialRef: requirement.ref!, authorize });
+  const both = { ...requirement, permissions: [gmailScopes.readonly, gmailScopes.send] };
+  await assert.rejects(helper.connect(both), /requested permissions/);
+  assert.equal(helper.inspect(both).state, "authorization-required");
+  await assert.rejects(helper.connect(requirement), /Host denied consent/);
+  assert.equal(helper.getSnapshot().busy, false);
+  helper.disconnect();
 });
