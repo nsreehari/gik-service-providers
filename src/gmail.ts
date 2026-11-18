@@ -1,6 +1,6 @@
 import {
   requireServiceDependency, serviceConfig, UnsatisfiedServiceDependencyError,
-  type ServiceDependencyRequirement, type ServiceRequest,
+  type ServiceDependencyRequirement, type ServiceProbeResult, type ServiceRequest,
 } from "gik-controlface/services";
 import type { NativeServiceDeclaration } from "gik-kernel";
 import { integer, isJson, keys, object, text } from "./values";
@@ -235,12 +235,13 @@ export function createGmailServiceKind(): DiagnosticServiceKindFactory {
           if (sends) requireServiceDependency(context, sendRequirement(declaration), serviceId);
           return { ok: true, detail: { check: "readiness", sendPort: sends } };
         },
-        async testSmoke(request, smokeContext) {
+        async testSmoke(request, smokeContext): Promise<ServiceProbeResult> {
           if (!operations.includes(request.operation)) throw new Error("Gmail operation is not declared");
           const operation = request.operation === "watch" ? "search" : request.operation;
           if (operation !== "search" && operation !== "get" && operation !== "send") throw new Error("Unsupported Gmail smoke test");
           const input = object(request.input ?? {}, "Gmail smoke input");
           const sample = operation === "search" ? { ...input, maxResults: 1 } : input;
+          if (!isJson(sample)) throw new Error("Gmail smoke input must be JSON data");
           const output = object(await call({ ...request, input: sample }, operation, smokeContext.signal), "Gmail smoke response");
           if (operation === "send") {
             if (typeof output.id !== "string" || !output.id) {
