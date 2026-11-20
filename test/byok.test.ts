@@ -59,7 +59,7 @@ function fixture(spec: Provider, response: () => Response | Promise<Response> = 
   }));
   const authorizeEndpoint = vi.fn<NonNullable<ServiceKindContext["authorizeEndpoint"]>>(async () => true);
   const context: ServiceKindContext = {
-    identity, inspectDependency: () => status, resolveCredential, authorizeEndpoint,
+    identity, hostCapabilities: [], inspectDependency: () => status, resolveCredential, authorizeEndpoint,
   };
   const factory = spec.factory({ fetch: fetcher });
   return {
@@ -84,8 +84,9 @@ for (const spec of providers) {
     assert.equal(catalog.capabilities[0].id, spec.contract);
     assert.equal(f.resolveCredential.mock.calls.length, 0);
     assert.equal(f.fetcher.mock.calls.length, 0);
-    for (const config of [{ model: "bad/model", credentialRef: "x" }, { model: `${spec.model}\n`, credentialRef: "x" },
-      { model: spec.model, credentialRef: "" }, { model: spec.model, credentialRef: "x", key: "not-allowed" }]) {
+    const configs: Json[] = [{ model: "bad/model", credentialRef: "x" }, { model: `${spec.model}\n`, credentialRef: "x" },
+      { model: spec.model, credentialRef: "" }, { model: spec.model, credentialRef: "x", key: "not-allowed" }];
+    for (const config of configs) {
       assert.equal((await registry.validate({ ...declaration(spec), config })).ok, false);
     }
     for (const operation of [
@@ -117,7 +118,7 @@ for (const spec of providers) {
     if (spec.kind === "openai-byok") assert.equal(JSON.parse(String(init?.body)).store, false);
     for (const status of [401, 403, 429, 500]) {
       const failed = fixture(spec, () => json({ error: { message: `provider echoed ${key}` } }, status));
-      await assert.rejects(() => failed.adapter.execute(request(spec), {}), error => {
+      await assert.rejects(async () => failed.adapter.execute(request(spec), {}), (error: unknown) => {
         assert.ok(error instanceof Error && error.message.includes(`HTTP ${status}`));
         assert.ok(!error.message.includes(key));
         assert.ok(!error.message.includes("provider echoed"));
@@ -130,11 +131,11 @@ for (const spec of providers) {
   test(`${spec.kind}: missing dependency and denied endpoint fail before key resolution`, async () => {
     const f = fixture(spec);
     f.setStatus({ state: "missing", message: "Synthetic key missing" });
-    await assert.rejects(() => f.adapter.execute(request(spec), {}), UnsatisfiedServiceDependencyError);
+    await assert.rejects(async () => f.adapter.execute(request(spec), {}), UnsatisfiedServiceDependencyError);
     assert.equal(f.resolveCredential.mock.calls.length, 0);
     f.setStatus({ state: "ready" });
     f.authorizeEndpoint.mockResolvedValue(false);
-    await assert.rejects(() => f.adapter.execute(request(spec), {}), /denied/);
+    await assert.rejects(async () => f.adapter.execute(request(spec), {}), /denied/);
     assert.equal(f.resolveCredential.mock.calls.length, 0);
     assert.equal(f.fetcher.mock.calls.length, 0);
   });
@@ -143,18 +144,18 @@ for (const spec of providers) {
     const cancelled = fixture(spec);
     const controller = new AbortController();
     controller.abort();
-    await assert.rejects(() => cancelled.adapter.execute(request(spec), { signal: controller.signal }), { name: "AbortError" });
+    await assert.rejects(async () => cancelled.adapter.execute(request(spec), { signal: controller.signal }), { name: "AbortError" });
     assert.equal(cancelled.fetcher.mock.calls.length, 0);
     const revoked = fixture(spec, () => {
       revoked.setStatus({ state: "unavailable", message: "Synthetic revocation" });
       return sse(spec.reply());
     });
-    await assert.rejects(() => revoked.adapter.execute(request(spec), {}), UnsatisfiedServiceDependencyError);
+    await assert.rejects(async () => revoked.adapter.execute(request(spec), {}), UnsatisfiedServiceDependencyError);
     const replaced = fixture(spec, () => {
       replaced.lifetime.abort();
       return sse(spec.reply());
     });
-    await assert.rejects(() => replaced.adapter.execute(request(spec), {}), { name: "AbortError" });
+    await assert.rejects(async () => replaced.adapter.execute(request(spec), {}), { name: "AbortError" });
     let active: AbortSignal | undefined;
     const pending = fixture(spec);
     pending.fetcher.mockImplementation(async (_url, init) => {
@@ -167,7 +168,7 @@ for (const spec of providers) {
       }));
     });
     const controller2 = new AbortController();
-    await assert.rejects(() => pending.adapter.execute(request(spec), { signal: controller2.signal }), { name: "AbortError" });
+    await assert.rejects(async () => pending.adapter.execute(request(spec), { signal: controller2.signal }), { name: "AbortError" });
     assert.equal(active?.aborted, true);
   });
 
@@ -179,7 +180,7 @@ for (const spec of providers) {
     assert.equal(probe.fetcher.mock.calls[0][1]?.method, "GET");
     assert.equal(probe.fetcher.mock.calls.length, 1);
     const denied = fixture(spec, () => json({}));
-    await assert.rejects(() => denied.adapter.probe!({}), /did not confirm/);
+    await assert.rejects(async () => denied.adapter.probe!({}), /did not confirm/);
     const smoke = fixture(spec, () => sse(spec.reply(`Actual synthetic reply ${key} sk-synthetic-other ${"x".repeat(2200)}`)));
     const result = await smoke.adapter.testSmoke(request(spec), {});
     assert.equal(result.ok, true);
@@ -219,15 +220,15 @@ for (const spec of providers) {
       () => new Response("x".repeat(2 * 1024 * 1024 + 1)),
     ]) {
       const f = fixture(spec, response);
-      await assert.rejects(() => f.adapter.execute(request(spec), {}));
+      await assert.rejects(async () => f.adapter.execute(request(spec), {}));
       assert.equal(f.fetcher.mock.calls.length, 1);
     }
     const f = fixture(spec);
-    await assert.rejects(() => f.adapter.execute({ ...request(spec), input: { bad: "shape" } }, {}), /Supply/);
-    const huge = spec.kind === "gemini-byok"
+    await assert.rejects(async () => f.adapter.execute({ ...request(spec), input: { bad: "shape" } }, {}), /Supply/);
+    const huge: Json = spec.kind === "gemini-byok"
       ? { contents: [{ role: "user", parts: [{ text: "x".repeat(16 * 1024 * 1024) }] }] }
       : { input: [{ role: "user", content: "x".repeat(16 * 1024 * 1024) }] };
-    await assert.rejects(() => f.adapter.execute({ ...request(spec), input: huge }, {}), /size budget/);
+    await assert.rejects(async () => f.adapter.execute({ ...request(spec), input: huge }, {}), /size budget/);
     assert.equal(f.fetcher.mock.calls.length, 0);
   });
 }
