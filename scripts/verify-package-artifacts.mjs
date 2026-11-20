@@ -69,7 +69,23 @@ export async function exerciseConsumer(packageSpec, source, signatureAudit = fal
     if (signatureAudit) run("npm", ["audit", "signatures"], { cwd: temporary });
     const specifiers = Object.keys(source.exports).map((entry) => source.name + entry.slice(1));
     writeFileSync(join(temporary, "check.ts"), specifiers.map((specifier, index) =>
-      `import * as entry${index} from ${JSON.stringify(specifier)};\nvoid entry${index};`).join("\n"));
+      `import * as entry${index} from ${JSON.stringify(specifier)};\nvoid entry${index};`).join("\n") + `
+import { createCredentialAccess, createMemoryCredentialStore, type CredentialStore, type ApiCredential,
+  type ModelDiscovery } from "gik-service-providers/byok";
+import { createGeminiByokServiceKind, type GeminiByokAdapter } from "gik-service-providers/gemini-byok";
+import { createOpenAiByokServiceKind, type OpenAiByokAdapter } from "gik-service-providers/openai-byok";
+const store: CredentialStore = createMemoryCredentialStore();
+const access = createCredentialAccess(store, "fixture/key");
+const grant: Promise<ApiCredential> = access.resolve();
+const gemini = createGeminiByokServiceKind();
+const openai = createOpenAiByokServiceKind();
+const smokeSupport: true = gemini.manifest.supports.testSmoke;
+function verifyAdapter(adapter: GeminiByokAdapter | OpenAiByokAdapter) {
+  const discovery: ModelDiscovery = adapter;
+  return [discovery.listModels({}), adapter.testSmoke];
+}
+void [grant, gemini, openai, smokeSupport, verifyAdapter];
+`);
     run(process.execPath, [join(temporary, "node_modules/typescript/bin/tsc"), "--noEmit", "--strict",
       "--module", "NodeNext", "--moduleResolution", "NodeNext", "--target", "ES2022", "check.ts"], { cwd: temporary });
     for (const specifier of specifiers) {
@@ -83,13 +99,30 @@ export async function exerciseConsumer(packageSpec, source, signatureAudit = fal
   const specifier = ${JSON.stringify(specifier)};
   registerHooks({ resolve(request, context, next) {
     if (request.startsWith(${JSON.stringify(source.name + "/")}) && request !== specifier) throw new Error("Eager sibling provider import");
-    if (["gik-service-providers/foundry", "gik-service-providers/gmail"].includes(specifier)
+    if (["gik-service-providers/foundry", "gik-service-providers/gmail", "gik-service-providers/byok",
+      "gik-service-providers/gemini-byok", "gik-service-providers/openai-byok"].includes(specifier)
       && (request === "croner" || request.startsWith("croner/"))) throw new Error("Unrelated scheduler dependency");
     const result = next(request, context);
     if (${JSON.stringify(siblingTargets)}.some((target) => result.url.endsWith(target))) throw new Error("Eager relative sibling provider import");
     return result;
   } });
   await import(specifier);
+  if (specifier === "gik-service-providers/byok") {
+    const { createMemoryCredentialStore, createCredentialAccess } = await import(specifier);
+    const access = createCredentialAccess(createMemoryCredentialStore(), "fixture/key");
+    await access.save("synthetic-packed-consumer-key");
+    const grant = await access.resolve();
+    assert.equal(grant.key, "synthetic-packed-consumer-key");
+    await access.clear();
+    assert.equal(grant.signal.aborted, true);
+  }
+  if (specifier.endsWith("/gemini-byok") || specifier.endsWith("/openai-byok")) {
+    const entry = await import(specifier);
+    const factory = specifier.endsWith("/gemini-byok")
+      ? entry.createGeminiByokServiceKind() : entry.createOpenAiByokServiceKind();
+    assert.equal(factory.manifest.supports.testSmoke, true);
+    assert.deepEqual(factory.manifest.operationConstraints.generate, { queueable: false, retryable: false });
+  }
   await assert.rejects(import(${JSON.stringify(source.name)}), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
   `], { cwd: temporary });
     }
