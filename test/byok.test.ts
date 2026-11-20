@@ -59,7 +59,7 @@ function fixture(spec: Provider, response: () => Response | Promise<Response> = 
   }));
   const authorizeEndpoint = vi.fn<NonNullable<ServiceKindContext["authorizeEndpoint"]>>(async () => true);
   const context: ServiceKindContext = {
-    identity, hostCapabilities: [], inspectDependency: () => status, resolveCredential, authorizeEndpoint,
+    identity, hostCapabilities: new Set(), inspectDependency: () => status, resolveCredential, authorizeEndpoint,
   };
   const factory = spec.factory({ fetch: fetcher });
   return {
