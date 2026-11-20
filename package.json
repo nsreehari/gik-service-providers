@@ -16,6 +16,18 @@
     "examples"
   ],
   "exports": {
+    "./byok": {
+      "types": "./dist/byok.d.ts",
+      "import": "./dist/byok.js"
+    },
+    "./gemini-byok": {
+      "types": "./dist/gemini-byok.d.ts",
+      "import": "./dist/gemini-byok.js"
+    },
+    "./openai-byok": {
+      "types": "./dist/openai-byok.d.ts",
+      "import": "./dist/openai-byok.js"
+    },
     "./market-quotes": {
       "types": "./dist/market-quotes.d.ts",
       "import": "./dist/market-quotes.js"

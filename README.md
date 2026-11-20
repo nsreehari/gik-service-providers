@@ -10,6 +10,8 @@ import { createGmailServiceKind } from "gik-service-providers/gmail";
 import { createGitHubContextStoreServiceKind } from "gik-service-providers/github-context-store";
 import { createFoundryServiceKind } from "gik-service-providers/foundry";
 import { createMarketQuotesServiceKind } from "gik-service-providers/market-quotes";
+import { createGeminiByokServiceKind } from "gik-service-providers/gemini-byok";
+import { createOpenAiByokServiceKind } from "gik-service-providers/openai-byok";
 ```
 
 There is deliberately **no package-root export or index barrel**. Applications
@@ -53,6 +55,109 @@ connection through an operator CLI/deployment tool. Neither provider opens login
 windows or stores refresh tokens. Gmail scopes may require Google's sensitive/
 restricted-scope verification; see [Google's scope guide](https://developers.google.com/workspace/gmail/api/auth/scopes).
 The examples are integration seams, not a bundled OAuth application or token vault.
+
+## Browser-Direct BYOK
+
+Independent `/gemini-byok` and `/openai-byok` exports implement version `1`,
+immediate `generate` operations with contracts `gemini.generate/v1` and
+`openai.generate/v1`. Config contains **only** `{ model, credentialRef }`:
+
+```ts
+const declaration = {
+  kind: "gemini-byok", version: "1",
+  config: { model: "gemini-2.5-flash", credentialRef: "ai/main" },
+  operations: {
+    generate: {
+      operation: "generate", contract: "gemini.generate/v1",
+      settlement: { transform: { kind: "jsonata", expr: "{}" } },
+    },
+  },
+};
+```
+
+For OpenAI, use `kind: "openai-byok"`, contract `openai.generate/v1` and an
+explicitly selected Responses-compatible model. Gemini accepts
+`{ contents, tools? }` in the GenerateContent wire format and returns
+`{ parts, finishReason }`. OpenAI accepts `{ input, tools? }` in the Responses
+wire format and returns `{ items }`. Gemini thought signatures and OpenAI opaque
+reasoning/function-call items are preserved for host-managed continuations.
+The host validates tool schemas and owns all tool execution, consent, content
+policy and invocation authority. Providers never execute tools.
+
+Each factory accepts optional `{ fetch }` for host transport injection/testing.
+Gemini uses only `https://generativelanguage.googleapis.com`; OpenAI uses only
+`https://api.openai.com` and sets `store: false`. Keys travel in headers, never
+URLs. Every concrete URL requires host `authorizeEndpoint` approval **before**
+`resolveCredential(credentialRef)`. The host must also implement synchronous
+`inspectDependency` for the full service identity. Credential resolution returns
+an `ApiCredential` (`{ key, signal, check() }`); abort its lifetime and make
+`check()` reject on replacement/revocation. Readiness is checked before transport
+and after awaiting it; revoked/cancelled responses cannot settle successfully.
+
+The explicitly named `/byok` export provides the shared transport,
+`ApiCredential`, `CredentialStore`, `createCredentialAccess`,
+`createMemoryCredentialStore`, and model discovery types. A host may inject an
+approved vault through async `read`/`write`/`remove` ports. Memory storage is the
+only supplied implementation: **no localStorage, IndexedDB, filesystem or
+credential persistence implementation is included**. Access snapshots/subscriptions
+contain only generation/availability. Save/clear invalidate outstanding grants;
+async mutations are serialized so a delayed save cannot undo a later clear.
+Existing vault data is resolved on demand; the host owns restored-key readiness,
+vault unlock, storage consent, identity scoping and secure deletion guarantees.
+This port is not completion of credential lifecycle issue [#13](https://github.com/nsreehari/gik-service-providers/issues/13).
+
+### Discovery And Diagnostics
+
+- `discover()` describes the local contract without credentials or network calls.
+- `listModels({ signal })` explicitly queries the key's visible models. Gemini
+  follows at most 20 pages and filters generation methods. OpenAI lacks capability
+  metadata: its known text/tool-family filter offers **candidates**, not proof of
+  Responses/tool compatibility. A manually selected model does not require discovery.
+- `probe({ signal })` makes one authenticated **model metadata GET**, confirms the
+  configured ID, and reports `check: "model-access"`. It does not imply a successful
+  generation, tool round trip, quota/billing acceptance or live deployment validation.
+- `testSmoke(request, { signal })` makes one separate synthetic inference:
+  “Reply with OK. This is a connection test.” It never executes tools or reuses
+  caller content. Success returns `check: "model-response"`, model and the actual
+  nonempty reply (not a fabricated `OK`). Failures expose actual HTTP/streaming
+  provider diagnostics; diagnostic strings/replies redact the active key and known
+  key prefixes and are bounded to 2 KiB. Treat all output as untrusted text, never
+  HTML; do not log or persist credentials or diagnostic content.
+
+Hosts must obtain explicit processing consent before smoke/inference and disclose
+that these requests can consume quota. No retries, correction attempts, queued
+generation, automatic discovery or key refresh occur. Transport buffers SSE before
+settlement (not a public incremental-token API), with a 120-second request timeout,
+16 MiB generation input budget, 2 MiB response budget and 999-model discovery
+budget. Hosts can supply a shorter timeout signal for smoke tests. Interrupted,
+ambiguous or incomplete generations fail without executing any returned tools.
+
+### Compatibility And Validation Boundaries
+
+The adapters structurally expose `testSmoke` against published ControlFace 0.7.0;
+no private/file dependency or existing diagnostics implementation is copied.
+Generic host smoke dispatch depends on
+[core PR #104](https://github.com/nsreehari/generative-interaction-kernel/pull/104)
+and the parallel provider diagnostics work in
+[#11](https://github.com/nsreehari/gik-service-providers/pull/11).
+The Gmail connection work in [#8](https://github.com/nsreehari/gik-service-providers/pull/8)
+is independent and unchanged.
+
+These are browser-direct HTTP providers, **not yet certified for a strict CSP
+browser bundle**: published `gik-controlface/services` also initializes a schema
+compiler requiring runtime code generation. The Finbook browser alias/facade is
+deliberately not copied. Dependency-only browser-safe helper exports are tracked
+by [core #105](https://github.com/nsreehari/generative-interaction-kernel/issues/105);
+do not enable `unsafe-eval` as a workaround. Finbook adoption/release is tracked
+separately in [Finbook #47](https://github.com/sreehari-in/finbook/issues/47).
+
+Implementation was extracted from Finbook's local reusable `external/byok`,
+`external/gemini-byok` and `external/openai-byok` modules, without application UI,
+browser facades, financial code or data. Automated tests use synthetic fetch
+responses and in-memory stores only. Build/typecheck/unit and actual packed
+typed/runtime consumers run in hosted CI per `AGENTS.md`; they are not live-key
+acceptance, billing, browser CORS/CSP, Google/OpenAI authorization or deployment
+evidence. Package release and live acceptance remain separate maintainer actions.
 
 ## Market Quotes
 

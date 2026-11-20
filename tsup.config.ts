@@ -2,6 +2,9 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
+    byok: "src/byok.ts",
+    "gemini-byok": "src/gemini-byok.ts",
+    "openai-byok": "src/openai-byok.ts",
     "market-quotes": "src/market-quotes.ts",
     scheduler: "src/scheduler.ts",
     gmail: "src/gmail.ts",
